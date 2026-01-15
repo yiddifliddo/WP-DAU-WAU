@@ -1,4 +1,4 @@
-# WP-DAU-WAU
+# WP-DAU-WAU Stickiness Analytics - DAU/MAU Tracker
 Weekly Active Users (DAU/WAU) for WP AI Advert efficiency 
 Install as a .zip to WP
 You need OpenAI or FREE Minstral AI Agnet 
