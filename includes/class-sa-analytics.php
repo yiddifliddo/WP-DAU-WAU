@@ -62,12 +62,16 @@ class SA_Analytics {
     }
     
     /**
-     * Get rolling MAU (last 30 days)
+     * Get rolling MAU (30-day window ending on $end_date, inclusive)
+     *
+     * Uses -29 days because BETWEEN is inclusive on both ends:
+     * end_date minus 29 days through end_date = 30 days total.
      */
     public function get_rolling_mau($end_date = null) {
         global $wpdb;
-        
+
         $end_date = $end_date ?: current_time('Y-m-d');
+        // 30-day inclusive window: today + 29 preceding days = 30 days
         $start_date = date('Y-m-d', strtotime('-29 days', strtotime($end_date)));
         
         $pageviews_table = $this->database->get_pageviews_table();
@@ -130,31 +134,43 @@ class SA_Analytics {
     
     /**
      * Get page-level stickiness metrics
-     * Returns pages ranked by stickiness (return visitor rate)
+     * Returns pages ranked by stickiness (rate of visitors who visited this specific page more than once)
      */
     public function get_page_stickiness($days = 30, $limit = 20) {
         global $wpdb;
-        
+
         $pageviews_table = $this->database->get_pageviews_table();
         $visitors_table = $this->database->get_visitors_table();
-        
+
         $start_date = date('Y-m-d', strtotime("-{$days} days"));
         $end_date = current_time('Y-m-d');
-        
-        // Get pages with the highest proportion of returning visitors
+
+        // Get pages with the highest proportion of returning visitors to THIS PAGE
+        // Uses a subquery to count per-page visits per visitor, so stickiness reflects
+        // visitors who came back to the same page, not just any page on the site.
         $query = $wpdb->prepare(
-            "SELECT 
+            "SELECT
                 pv.page_id,
                 pv.page_url,
                 pv.page_title,
                 pv.post_type,
                 COUNT(DISTINCT pv.visitor_id) as unique_visitors,
                 COUNT(*) as total_views,
-                COUNT(DISTINCT CASE WHEN v.total_visits > 1 THEN pv.visitor_id END) as return_visitors,
+                COUNT(DISTINCT CASE
+                    WHEN (SELECT COUNT(*) FROM {$pageviews_table} pv2
+                          WHERE pv2.page_id = pv.page_id
+                          AND pv2.visitor_id = pv.visitor_id
+                          AND pv2.visit_date BETWEEN %s AND %s) > 1
+                    THEN pv.visitor_id END) as return_visitors,
                 AVG(pv.time_on_page) as avg_time_on_page,
                 AVG(pv.scroll_depth) as avg_scroll_depth,
                 SUM(CASE WHEN pv.is_bounce = 1 THEN 1 ELSE 0 END) / COUNT(*) * 100 as bounce_rate,
-                COUNT(DISTINCT CASE WHEN v.total_visits > 1 THEN pv.visitor_id END) / COUNT(DISTINCT pv.visitor_id) * 100 as stickiness_score,
+                COUNT(DISTINCT CASE
+                    WHEN (SELECT COUNT(*) FROM {$pageviews_table} pv2
+                          WHERE pv2.page_id = pv.page_id
+                          AND pv2.visitor_id = pv.visitor_id
+                          AND pv2.visit_date BETWEEN %s AND %s) > 1
+                    THEN pv.visitor_id END) / COUNT(DISTINCT pv.visitor_id) * 100 as stickiness_score,
                 COUNT(DISTINCT CASE WHEN v.utm_medium IN ('cpc', 'ppc', 'paid', 'paidsearch', 'paid_search', 'cpv', 'cpm', 'banner', 'display', 'retargeting', 'paid_social', 'paidsocial') THEN pv.visitor_id END) as paid_visitors,
                 (COUNT(DISTINCT CASE WHEN v.utm_medium IN ('cpc', 'ppc', 'paid', 'paidsearch', 'paid_search', 'cpv', 'cpm', 'banner', 'display', 'retargeting', 'paid_social', 'paidsocial') THEN pv.visitor_id END) / COUNT(DISTINCT pv.visitor_id)) * 100 as paid_traffic_pct
              FROM {$pageviews_table} pv
@@ -165,6 +181,10 @@ class SA_Analytics {
              HAVING unique_visitors >= 5
              ORDER BY stickiness_score DESC, unique_visitors DESC
              LIMIT %d",
+            $start_date,
+            $end_date,
+            $start_date,
+            $end_date,
             $start_date,
             $end_date,
             $limit
@@ -348,7 +368,7 @@ class SA_Analytics {
                 'total_pageviews' => intval($total_pageviews),
                 'avg_session_duration' => $session_stats ? floatval($session_stats->avg_session_duration) : null,
                 'avg_pages_per_session' => $session_stats ? floatval($session_stats->avg_pages_per_session) : null,
-                'bounce_rate' => floatval($bounce_rate),
+                'bounce_rate' => $bounce_rate !== null ? floatval($bounce_rate) : null,
                 'desktop_users' => $device_stats ? intval($device_stats->desktop_users) : 0,
                 'mobile_users' => $device_stats ? intval($device_stats->mobile_users) : 0,
                 'tablet_users' => $device_stats ? intval($device_stats->tablet_users) : 0,
@@ -576,12 +596,18 @@ class SA_Analytics {
                 END as traffic_type,
                 COUNT(DISTINCT pv.visitor_id) as visitors,
                 COUNT(*) as pageviews,
-                COUNT(DISTINCT CASE WHEN v.total_visits > 1 THEN pv.visitor_id END) as returning_visitors
+                COUNT(DISTINCT CASE
+                    WHEN (SELECT COUNT(DISTINCT pv2.visit_date) FROM {$pageviews_table} pv2
+                          WHERE pv2.visitor_id = pv.visitor_id
+                          AND pv2.visit_date BETWEEN %s AND %s) > 1
+                    THEN pv.visitor_id END) as returning_visitors
              FROM {$pageviews_table} pv
              JOIN {$visitors_table} v ON pv.visitor_id = v.id
              WHERE pv.visit_date BETWEEN %s AND %s
              GROUP BY traffic_type
              ORDER BY visitors DESC",
+            $start_date,
+            $end_date,
             $start_date,
             $end_date
         ), ARRAY_A);
@@ -603,8 +629,16 @@ class SA_Analytics {
                 COUNT(DISTINCT v.utm_campaign) as unique_campaigns,
                 COUNT(DISTINCT pv.visitor_id) as visitors,
                 COUNT(*) as pageviews,
-                COUNT(DISTINCT CASE WHEN v.total_visits > 1 THEN pv.visitor_id END) as returning_visitors,
-                (COUNT(DISTINCT CASE WHEN v.total_visits > 1 THEN pv.visitor_id END) / COUNT(DISTINCT pv.visitor_id)) * 100 as stickiness
+                COUNT(DISTINCT CASE
+                    WHEN (SELECT COUNT(DISTINCT pv2.visit_date) FROM {$pageviews_table} pv2
+                          WHERE pv2.visitor_id = pv.visitor_id
+                          AND pv2.visit_date BETWEEN %s AND %s) > 1
+                    THEN pv.visitor_id END) as returning_visitors,
+                (COUNT(DISTINCT CASE
+                    WHEN (SELECT COUNT(DISTINCT pv2.visit_date) FROM {$pageviews_table} pv2
+                          WHERE pv2.visitor_id = pv.visitor_id
+                          AND pv2.visit_date BETWEEN %s AND %s) > 1
+                    THEN pv.visitor_id END) / COUNT(DISTINCT pv.visitor_id)) * 100 as stickiness
              FROM {$pageviews_table} pv
              JOIN {$visitors_table} v ON pv.visitor_id = v.id
              WHERE pv.visit_date BETWEEN %s AND %s
@@ -620,6 +654,10 @@ class SA_Analytics {
              HAVING visitors >= 1
              ORDER BY visitors DESC",
             $start_date,
+            $end_date,
+            $start_date,
+            $end_date,
+            $start_date,
             $end_date
         ), ARRAY_A);
         
@@ -631,8 +669,16 @@ class SA_Analytics {
                 v.utm_campaign,
                 COUNT(DISTINCT pv.visitor_id) as visitors,
                 COUNT(*) as pageviews,
-                COUNT(DISTINCT CASE WHEN v.total_visits > 1 THEN pv.visitor_id END) as returning_visitors,
-                (COUNT(DISTINCT CASE WHEN v.total_visits > 1 THEN pv.visitor_id END) / COUNT(DISTINCT pv.visitor_id)) * 100 as stickiness
+                COUNT(DISTINCT CASE
+                    WHEN (SELECT COUNT(DISTINCT pv2.visit_date) FROM {$pageviews_table} pv2
+                          WHERE pv2.visitor_id = pv.visitor_id
+                          AND pv2.visit_date BETWEEN %s AND %s) > 1
+                    THEN pv.visitor_id END) as returning_visitors,
+                (COUNT(DISTINCT CASE
+                    WHEN (SELECT COUNT(DISTINCT pv2.visit_date) FROM {$pageviews_table} pv2
+                          WHERE pv2.visitor_id = pv.visitor_id
+                          AND pv2.visit_date BETWEEN %s AND %s) > 1
+                    THEN pv.visitor_id END) / COUNT(DISTINCT pv.visitor_id)) * 100 as stickiness
              FROM {$pageviews_table} pv
              JOIN {$visitors_table} v ON pv.visitor_id = v.id
              WHERE pv.visit_date BETWEEN %s AND %s
@@ -650,9 +696,13 @@ class SA_Analytics {
              ORDER BY visitors DESC
              LIMIT 10",
             $start_date,
+            $end_date,
+            $start_date,
+            $end_date,
+            $start_date,
             $end_date
         ), ARRAY_A);
-        
+
         return [
             'devices' => $devices,
             'browsers' => $browsers,

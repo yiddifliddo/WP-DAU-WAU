@@ -17,6 +17,8 @@
     let startTime = Date.now();
     let maxScrollDepth = 0;
     let isEngaged = false; // Has user interacted beyond initial load
+    let hasInteracted = false; // Raw interaction signal (click, scroll, keydown)
+    const ENGAGEMENT_THRESHOLD_MS = 5000; // Minimum time (ms) before interaction counts as engagement
     let lastActivityTime = Date.now();
     let timeOnPage = 0;
     let isVisible = true;
@@ -281,10 +283,16 @@
     
     /**
      * Detect user engagement
+     * Requires both an interaction (click/scroll/keydown) AND a minimum time on page
+     * to avoid counting accidental touches or immediate bounces as engagement.
      */
     function detectEngagement() {
-        isEngaged = true;
+        hasInteracted = true;
         lastActivityTime = Date.now();
+        // Only mark as truly engaged if user has spent enough time on the page
+        if (!isEngaged && (Date.now() - startTime) >= ENGAGEMENT_THRESHOLD_MS) {
+            isEngaged = true;
+        }
     }
     
     /**
@@ -322,6 +330,10 @@
         
         // Periodic engagement updates (every 15 seconds while active)
         setInterval(function() {
+            // Promote interaction to engagement once time threshold is met
+            if (hasInteracted && !isEngaged && (Date.now() - startTime) >= ENGAGEMENT_THRESHOLD_MS) {
+                isEngaged = true;
+            }
             if (isVisible && (Date.now() - lastActivityTime) < 60000) {
                 trackEngagement(false);
             }
