@@ -141,14 +141,33 @@ class Stickiness_Analytics {
             true
         );
         
+        // Use post-specific data only on singular pages; handle archives/404s differently
+        if (is_singular()) {
+            $page_id    = get_the_ID();
+            $page_url   = get_permalink();
+            $page_title = get_the_title();
+            $post_type  = get_post_type();
+        } else {
+            $page_id    = 0;
+            $page_url   = home_url(add_query_arg(null, null));
+            $page_title = wp_get_document_title();
+            $post_type  = is_front_page() ? 'front_page'
+                        : (is_home()      ? 'blog_index'
+                        : (is_category()  ? 'category'
+                        : (is_tag()       ? 'tag'
+                        : (is_archive()   ? 'archive'
+                        : (is_search()    ? 'search'
+                        : (is_404()       ? '404' : 'other'))))));
+        }
+
         wp_localize_script('sa-frontend', 'saConfig', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'restUrl' => rest_url('stickiness-analytics/v1/'),
             'nonce' => wp_create_nonce('sa_nonce'),
-            'pageId' => get_the_ID(),
-            'pageUrl' => get_permalink(),
-            'pageTitle' => get_the_title(),
-            'postType' => get_post_type(),
+            'pageId' => $page_id,
+            'pageUrl' => $page_url,
+            'pageTitle' => $page_title,
+            'postType' => $post_type,
             'cookieDuration' => get_option('sa_cookie_duration', 365),
         ]);
     }
