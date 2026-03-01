@@ -99,7 +99,8 @@ class Stickiness_Analytics {
     public function activate() {
         $database = new SA_Database();
         $database->create_tables();
-        
+        update_option('sa_db_version', SA_DB_VERSION);
+
         // Set default options
         add_option('sa_tracking_enabled', 1);
         add_option('sa_exclude_admins', 1);
