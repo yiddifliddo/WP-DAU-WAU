@@ -115,13 +115,10 @@ class Stickiness_Analytics {
         if (!wp_next_scheduled('sa_daily_cleanup')) {
             wp_schedule_event(time(), 'daily', 'sa_daily_cleanup');
         }
-        
-        flush_rewrite_rules();
     }
-    
+
     public function deactivate() {
         wp_clear_scheduled_hook('sa_daily_cleanup');
-        flush_rewrite_rules();
     }
     
     public function enqueue_frontend_scripts() {
